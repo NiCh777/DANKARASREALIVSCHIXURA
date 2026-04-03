@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="ka">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>FUTBALI ONLINE - FINAL</title>
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-database.js"></script>
+    <style>
+        body { margin: 0; background: #1a1a2e; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; font-family: sans-serif; color: white; overflow: hidden; touch-action: none; }
+        .screen { display: none; flex-direction: column; align-items: center; text-align: center; }
+        .active { display: flex; }
+        .menu-btn { padding: 18px; margin: 10px; font-size: 18px; width: 280px; cursor: pointer; border: none; border-radius: 12px; background: #48abe0; color: white; font-weight: bold; }
+        .menu-btn:disabled { background: #555; opacity: 0.5; cursor: not-allowed; }
+        input { padding: 15px; margin-bottom: 20px; width: 240px; border-radius: 10px; border: 2px solid #48abe0; font-size: 18px; text-align: center; background: #0f3460; color: white; }
+        canvas { background: #0f3460; border: 4px solid #48abe0; border-radius: 10px; display: none; }
+        #score-board { font-size: 24px; margin-bottom: 10px; display: none; background: #16213e; padding: 10px 30px; border-radius: 30px; border: 1px solid #48abe0; }
+        .controls { position: fixed; bottom: 20px; display: none; gap: 20px; }
+        .c-btn { width: 75px; height: 75px; background: rgba(255,255,255,0.1); border: 2px solid #fff; border-radius: 50%; font-size: 30px; display: flex; align-items: center; justify-content: center; color: white; user-select: none; }
+    </style>
+</head>
+<body>
+
+<div id="menu-container">
+    <div id="role-screen" class="screen active">
+        <h1>FUTBALI ONLINE</h1>
+        <button class="menu-btn" id="btn-p1" onclick="selectRole('p1')">PLAYER 1 (ლურჯი)</button>
+        <button class="menu-btn" id="btn-p2" onclick="selectRole('p2')">PLAYER 2 (წითელი)</button>
+    </div>
+    <div id="name-screen" class="screen">
+        <h1>შეიყვანე სახელი</h1>
+        <input type="text" id="username" placeholder="სახელი..." maxlength="10">
+        <button class="menu-btn" style="background: #27ae60;" onclick="joinGame()">შესვლა</button>
+    </div>
+    <div id="wait-screen" class="screen">
+        <h1>ველოდებით მეტოქეს...</h1>
+    </div>
+</div>
+
+<div id="score-board">
+    <span id="n1">P1</span>: <span id="s1">0</span> | <span id="s2">0</span> : <span id="n2">P2</span>
+</div>
+<canvas id="game-canvas"></canvas>
+
+<div class="controls" id="controls">
+    <button class="c-btn" id="l-btn">⬅️</button>
+    <button class="c-btn" id="u-btn">⬆️</button>
+    <button class="c-btn" id="r-btn">➡️</button>
+</div>
+
+<script>
+    const firebaseConfig = {
+        apiKey: "AIzaSyB_P95yT05HIW83CpwZx4WMWWP_vPB3S4s",
+        authDomain: "futbali.firebaseapp.com",
+        projectId: "futbali",
+        databaseURL: "https://futbalitqo-default-rtdb.firebaseio.com/", // შენი ზუსტი URL
+        storageBucket: "futbali.firebasestorage.app",
+        messagingSenderId: "380333518099",
+        appId: "1:380333518099:web:ba452f377d46239e03bee6"
+    };
+
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.database();
+    const matchRef = db.ref('match_realtime');
+
+    let role = null, myName = "", gameStarted = false;
+    let p1 = { x: 100, y: 340, dy: 0, s: 0, name: "P1" };
+    let p2 = { x: 650, y: 340, dy: 0, s: 0, name: "P2" };
+    let ball = { x: 400, y: 200, dx: 0, dy: 0, owner: "none" };
+
+    const canvas = document.getElementById('game-canvas');
+    const ctx = canvas.getContext('2d');
+    canvas.width = 800; canvas.height = 400;
+
+    // Presence შემოწმება
+    matchRef.child('presence').on('value', (snap) => {
+        const d = snap.val() || {};
+        document.getElementById('btn-p1').disabled = !!d.p1;
+        document.getElementById('btn-p2').disabled = !!d.p2;
+        if (d.p1 && d.p2 && role && !gameStarted) startGame();
+    });
+
+    function selectRole(r) {
+        role = r;
+        document.getElementById('role-screen').classList.remove('active');
+        document.getElementById('name-screen').classList.add('active');
+    }
+
+    async function joinGame() {
+        myName = document.getElementById('username').value || role.toUpperCase();
+        if(role === 'p1') await matchRef.child('state').remove();
+
+        const myStatus = matchRef.child('presence').child(role);
+        myStatus.set(true);
+        myStatus.onDisconnect().remove();
+
+        await matchRef.child('state').child(role).set({ name: myName, x: (role === 'p1' ? 100 : 650), y: 340, s: 0 });
+        document.getElementById('name-screen').classList.remove('active');
+        document.getElementById('wait-screen').classList.add('active');
+    }
+
+    function startGame() {
+        gameStarted = true;
+        document.getElementById('menu-container').style.display = 'none';
+        canvas.style.display = 'block';
+        document.getElementById('score-board').style.display = 'block';
+        document.getElementById('controls').style.display = 'flex';
+        if(role === 'p1') resetBall();
+        requestAnimationFrame(gameLoop);
+        
+        setInterval(() => {
+            if (role) {
+                let me = (role === 'p1' ? p1 : p2);
+                matchRef.child('state').child(role).update({ x: me.x, y: me.y });
+                if (ball.owner === role) matchRef.child('state').child('ball').set(ball);
+            }
+        }, 40);
+    }
+
+    matchRef.child('state').on('value', (snap) => {
+        const d = snap.val() || {};
+        if (d.p1) { p1.s = d.p1.s || 0; p1.name = d.p1.name; if(role==='p2'){ p1.x=d.p1.x; p1.y=d.p1.y; } }
+        if (d.p2) { p2.s = d.p2.s || 0; p2.name = d.p2.name; if(role==='p1'){ p2.x=d.p2.x; p2.y=d.p2.y; } }
+        if (d.ball && d.ball.owner !== role) ball = d.ball;
+        document.getElementById('s1').innerText = p1.s; document.getElementById('s2').innerText = p2.s;
+        document.getElementById('n1').innerText = p1.name; document.getElementById('n2').innerText = p2.name;
+    });
+
+    function resetBall() {
+        ball = { x: 400, y: 150, dx: (Math.random()>0.5?5:-5), dy: 2, owner: role };
+        matchRef.child('state').child('ball').set(ball);
+    }
+
+    const keys = {};
+    window.onkeydown = (e) => keys[e.code] = true;
+    window.onkeyup = (e) => keys[e.code] = false;
+
+    // მობილურის კონტროლი
+    const t = { l: false, r: false };
+    document.getElementById('l-btn').ontouchstart = (e) => { e.preventDefault(); t.l = true; };
+    document.getElementById('l-btn').ontouchend = () => t.l = false;
+    document.getElementById('r-btn').ontouchstart = (e) => { e.preventDefault(); t.r = true; };
+    document.getElementById('r-btn').ontouchend = () => t.r = false;
+    document.getElementById('u-btn').ontouchstart = (e) => { e.preventDefault(); let me=(role==='p1'?p1:p2); if(me.y>=340) me.dy=-14; };
+
+    function gameLoop() {
+        ctx.clearRect(0, 0, 800, 400);
+        let me = (role === 'p1' ? p1 : p2);
+        if (gameStarted) {
+            if (keys['ArrowLeft'] || t.l) me.x -= 8;
+            if (keys['ArrowRight'] || t.r) me.x += 8;
+            if ((keys['ArrowUp'] || keys['Space']) && me.y >= 340) me.dy = -14;
+            me.dy += 0.8; me.y += me.dy;
+            if(me.y > 340) { me.y = 340; me.dy = 0; }
+            me.x = Math.max(0, Math.min(750, me.x));
+            if (ball.owner === role) {
+                ball.x += ball.dx; ball.y += ball.dy; ball.dy += 0.25;
+                if(ball.y > 385) { ball.y = 385; ball.dy *= -0.6; }
+                if(ball.x < 0 || ball.x > 800) ball.dx *= -0.8;
+                if(role === 'p1') {
+                    if(ball.x < 10 && ball.y > 200) { matchRef.child('state/p2/s').set(p2.s+1); resetBall(); }
+                    else if(ball.x > 790 && ball.y > 200) { matchRef.child('state/p1/s').set(p1.s+1); resetBall(); }
+                }
+            }
+            if(ball.x > me.x - 15 && ball.x < me.x + 65 && ball.y > me.y - 15 && ball.y < me.y + 75) {
+                ball.dy = -11; ball.dx = (ball.x - (me.x + 25)) * 0.6; ball.owner = role;
+            }
+        }
+        ctx.fillStyle = "#48abe0"; ctx.fillRect(p1.x, p1.y, 50, 60);
+        ctx.fillStyle = "#ff4d4d"; ctx.fillRect(p2.x, p2.y, 50, 60);
+        ctx.fillStyle = "white"; ctx.beginPath(); ctx.arc(ball.x, ball.y, 12, 0, Math.PI*2); ctx.fill();
+        ctx.strokeStyle = "white"; ctx.strokeRect(0, 200, 15, 200); ctx.strokeRect(785, 200, 15, 200);
+        requestAnimationFrame(gameLoop);
+    }
+</script>
+</body>
+</html>
